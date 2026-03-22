@@ -86,7 +86,7 @@ Groq LLM:
 Example on Windows PowerShell:
 
 ```powershell
-$env:NEO4J_URI = "bolt://localhost:7687"
+$env:NEO4J_URI = "neo4j://127.0.0.1:7687"
 $env:NEO4J_USER = "neo4j"
 $env:NEO4J_PASSWORD = "password"
 $env:GROQ_API_KEY = "your_groq_api_key"
