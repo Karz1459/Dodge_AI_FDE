@@ -1,3 +1,13 @@
+---
+title: Dodge AI FDE
+emoji: 🚀
+colorFrom: blue
+colorTo: purple
+sdk: gradio
+sdk_version: "4.0.0"
+app_file: app.py
+pinned: false
+---
 # Dodge AI – Order‑to‑Cash Graph + LLM
 
 This project builds a realistic order‑to‑cash **business graph** in Neo4j from JSONL tables (orders, deliveries, invoices, payments, customers, products, AR, plants, etc.) and exposes it through:
