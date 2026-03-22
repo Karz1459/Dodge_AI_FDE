@@ -93,9 +93,9 @@ RETURN ...
 
 
 def get_neo4j_graph() -> Neo4jGraph:
-    uri = os.environ.get("NEO4J_URI", "neo4j://127.0.0.1:7687")
-    user = os.environ.get("NEO4J_USER", "neo4j")
-    password = os.environ.get("NEO4J_PASSWORD", "password")
+    uri = os.environ["NEO4J_URI"]
+    user = os.environ["NEO4J_USER"]
+    password = os.environ["NEO4J_PASSWORD"]
     return Neo4jGraph(url=uri, username=user, password=password)
 
 
