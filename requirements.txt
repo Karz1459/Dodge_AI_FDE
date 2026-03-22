@@ -1,0 +1,7 @@
+langchain
+langchain-community
+langchain-groq
+neo4j
+python-dotenv
+langchain_community 
+langchain-neo4j

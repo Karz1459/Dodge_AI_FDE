@@ -1,0 +1,391 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Dodge AI - Order Graph</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+
+<script src="https://unpkg.com/cytoscape@3.30.0/dist/cytoscape.min.js"></script>
+
+<style>
+body {
+  margin: 0;
+  font-family: system-ui;
+  display: flex;
+  height: 100vh;
+  overflow: hidden;
+}
+
+/* GRAPH AREA */
+#graph {
+  flex: 1;
+  position: relative;
+}
+
+/* RIGHT CHAT PANEL */
+#chatPanel {
+  width: 350px;
+  border-left: 1px solid #ddd;
+  display: flex;
+  flex-direction: column;
+  background: #fafafa;
+}
+
+#chatHeader {
+  padding: 12px;
+  font-weight: bold;
+  border-bottom: 1px solid #ddd;
+}
+
+#chatMessages {
+  flex: 1;
+  overflow-y: auto;
+  padding: 10px;
+}
+
+.msg {
+  margin-bottom: 10px;
+  padding: 8px;
+  border-radius: 6px;
+  font-size: 13px;
+}
+
+.user {
+  background: #2563eb;
+  color: white;
+  align-self: flex-end;
+}
+
+.bot {
+  background: #e5e7eb;
+}
+
+#chatInput {
+  display: flex;
+  padding: 10px;
+  gap: 5px;
+  border-top: 1px solid #ddd;
+}
+
+#chatInput input {
+  flex: 1;
+  padding: 6px;
+}
+
+#chatInput button {
+  background: #2563eb;
+  color: white;
+  border: none;
+  padding: 6px 10px;
+}
+
+/* NODE INFO POPUP */
+#nodeInfo {
+  position: absolute;
+  top: 20px;
+  left: 20px;
+  background: white;
+  border-radius: 10px;
+  padding: 12px;
+  width: 260px;
+  box-shadow: 0 5px 20px rgba(0,0,0,0.2);
+  display: none;
+}
+
+#nodeInfo h3 {
+  margin: 0 0 8px;
+}
+
+.small {
+  font-size: 12px;
+  color: #444;
+}
+
+/* LEGEND */
+#legend {
+  position: absolute;
+  bottom: 20px;
+  left: 20px;
+  background: rgba(255, 255, 255, 0.9);
+  border-radius: 8px;
+  padding: 6px 10px;
+  font-size: 11px;
+  box-shadow: 0 2px 6px rgba(0,0,0,0.15);
+}
+
+#legend .dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 999px;
+  display: inline-block;
+  margin-right: 4px;
+}
+</style>
+</head>
+
+<body>
+
+<div id="graph"></div>
+
+<div id="chatPanel">
+  <div id="chatHeader">Dodge AI</div>
+  <div id="chatMessages"></div>
+
+  <div id="chatInput">
+    <input id="question" placeholder="Ask anything..." />
+    <button onclick="ask()">Send</button>
+  </div>
+</div>
+
+<div id="nodeInfo"></div>
+
+<div id="legend">
+  <div>
+    <span class="dot" style="background:#fb923c;"></span>
+    nodes (entities like salesorder, product, customer)
+  </div>
+  <div>
+    <span class="dot" style="background:#2563eb;"></span>
+    relationships (connections between entities)
+  </div>
+</div>
+
+<script>
+const api = window.location.origin;
+
+/* INIT GRAPH */
+let cy = cytoscape({
+  container: document.getElementById('graph'),
+  style: [
+    {
+      selector: 'node',
+      style: {
+        'background-color': '#fb923c',
+        'color': '#fff',
+        'font-size': 10,
+        'text-valign': 'center'
+      }
+    },
+    {
+      selector: 'node.highlighted',
+      style: {
+        'border-width': 3,
+        'border-color': '#facc15'
+      }
+    },
+    {
+      selector: 'edge',
+      style: {
+        'width': 1,
+        'line-color': '#2563eb',
+        'target-arrow-shape': 'triangle',
+        'target-arrow-color': '#2563eb',
+        'curve-style': 'bezier',
+        'font-size': 8
+      }
+    }
+  ],
+  layout: { name: 'concentric' }
+});
+
+/* MERGE GRAPH DATA (EXPAND NODES) */
+function mergeGraphData(data) {
+  const existingNodes = new Set(cy.nodes().map(n => n.id()));
+  const existingEdges = new Set(cy.edges().map(e => e.id()));
+
+  const newElements = [];
+
+  (data.nodes || []).forEach(n => {
+    if (existingNodes.has(n.id)) {
+      const node = cy.getElementById(n.id);
+      node.data('label', n.label || n.id);
+      node.data('properties', n.properties || {});
+      return;
+    }
+    newElements.push({
+      data: {
+        id: n.id,
+        label: n.label || n.id,
+        properties: n.properties || {}
+      }
+    });
+  });
+
+  (data.edges || []).forEach(e => {
+    if (existingEdges.has(e.id)) return;
+    newElements.push({
+      data: {
+        id: e.id,
+        source: e.source,
+        target: e.target,
+        type: e.type
+      }
+    });
+  });
+
+  if (newElements.length) {
+    cy.add(newElements);
+  }
+}
+
+async function expandGraph(id) {
+  const res = await fetch(api + '/api/graph', {
+    method: 'POST',
+    headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({ id })
+  });
+
+  const data = await res.json();
+  mergeGraphData(data);
+  return data;
+}
+
+async function loadFullGraph() {
+  try {
+    const res = await fetch(api + '/api/full-graph');
+    if (!res.ok) return;
+    const data = await res.json();
+    mergeGraphData(data);
+    // Run an initial layout once for the full graph
+    cy.layout({ name: 'cose' }).run();
+  } catch (e) {
+    console.error('Failed to load full graph', e);
+  }
+}
+
+function showNodeInfo(title, props, id) {
+  let safeTitle = title || "";
+  if (safeTitle.toLowerCase().includes('node')) {
+    safeTitle = '';
+  }
+
+  let html = `<h3>${safeTitle || id}</h3>`;
+  const entries = Object.entries(props || {}).filter(([key, value]) => {
+    if (key === 'id') return false;
+    const vStr = String(value);
+    if (vStr === 'Node') return false;
+    if (vStr.toLowerCase().includes('tuple')) return false;
+    return true;
+  });
+
+  if (entries.length) {
+    entries.forEach(([key, value]) => {
+      html += `<div class="small"><b>${key}</b>: ${value}</div>`;
+    });
+  }
+
+  const box = document.getElementById('nodeInfo');
+  box.innerHTML = html;
+  box.style.display = 'block';
+}
+
+/* CLICK NODE -> EXPAND + SHOW DETAILS */
+cy.on('tap', 'node', function(evt){
+  const node = evt.target;
+  const id = node.id();
+
+  expandGraph(id).then(data => {
+    const center = data.center || { label: node.data('label'), properties: node.data('properties') || {} };
+    showNodeInfo(center.label, center.properties, id);
+  });
+});
+
+/* CHAT */
+function addMsg(text, cls) {
+  const div = document.createElement('div');
+  div.className = 'msg ' + cls;
+  div.innerText = text;
+  document.getElementById('chatMessages').appendChild(div);
+}
+
+function focusNode(id) {
+  const node = cy.getElementById(id);
+  if (!node || node.empty()) return;
+  cy.nodes().removeClass('highlighted');
+  node.addClass('highlighted');
+
+  cy.animate(
+    {
+      center: { eles: node },
+      zoom: 2.0,
+    },
+    {
+      duration: 500,
+      easing: 'ease-out',
+      complete: () => {
+        const props = node.data('properties') || {};
+        showNodeInfo(node.data('label'), props, id);
+      }
+    }
+  );
+}
+
+async function ask() {
+  const inputEl = document.getElementById('question');
+  const q = inputEl.value;
+  const trimmed = q.trim();
+
+  if (!trimmed) {
+    return; // do not send empty messages
+  }
+
+  addMsg(q, 'user');
+  inputEl.value = '';
+
+  let res;
+  try {
+    res = await fetch(api + '/api/chat', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ question: q })
+    });
+  } catch (e) {
+    addMsg('Error contacting server. Please try again.', 'bot');
+    return;
+  }
+
+  let data = null;
+  try {
+    data = await res.json();
+  } catch (e) {
+    addMsg('Received an invalid response from server.', 'bot');
+    return;
+  }
+
+  if (!res.ok) {
+    const detail = (data && data.detail) ? data.detail : 'Server returned an error.';
+    addMsg('Error: ' + detail, 'bot');
+    return;
+  }
+
+  const answerText = (data && typeof data.answer !== 'undefined')
+    ? data.answer
+    : 'No answer was returned from the server.';
+  addMsg(answerText, 'bot');
+
+  /* AUTO LOAD GRAPH if ID detected */
+  const match = q.match(/\d+/);
+  if (match) {
+    const id = match[0];
+    await expandGraph(id);
+    focusNode(id);
+  }
+}
+
+// Load an initial view of the graph on page load
+loadFullGraph();
+
+// Send message on Enter, allow Shift+Enter for newline
+document.getElementById('question').addEventListener('keydown', function (e) {
+  if (e.key === 'Enter') {
+    if (e.shiftKey) {
+      return; // allow newline
+    }
+    e.preventDefault();
+    ask();
+  }
+});
+</script>
+
+</body>
+</html>
