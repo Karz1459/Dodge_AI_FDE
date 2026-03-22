@@ -244,6 +244,57 @@ def _fix_payment_alias_conflicts(cypher: str) -> str:
     return "\n".join(lines)
 
 
+def _fix_top_level_case_expressions(cypher: str) -> str:
+    """Comment out bare top-level CASE blocks that break Cypher.
+
+    The LLM sometimes produces standalone CASE blocks like:
+
+        MATCH ...
+        OPTIONAL MATCH ...
+        CASE WHEN d IS NOT NULL AND b IS NULL THEN 'Delivered but not billed'
+             WHEN ... THEN ...
+        END AS flowStatus
+        RETURN ...
+
+    In Cypher, CASE must be an expression inside RETURN/WITH, not its
+    own statement. Rather than trying to perfectly rewrite these, we
+    simply comment out the whole CASE...END block so the query remains
+    valid and the summarizer can still infer statuses from raw data.
+    """
+
+    lines = cypher.splitlines()
+    i = 0
+
+    while i < len(lines):
+        line = lines[i]
+        stripped = line.lstrip()
+        if not stripped:
+            i += 1
+            continue
+
+        upper = stripped.upper()
+        if not upper.startswith("CASE "):
+            i += 1
+            continue
+
+        # Found the start of a CASE block; search for END ... AS ...
+        end_idx = i
+        for j in range(i, len(lines)):
+            s = lines[j].lstrip().upper()
+            if "END" in s and " AS " in s:
+                end_idx = j
+                break
+
+        # Comment out the CASE block lines
+        for k in range(i, end_idx + 1):
+            if lines[k].lstrip():
+                lines[k] = "// " + lines[k]
+
+        i = end_idx + 1
+
+    return "\n".join(lines)
+
+
 def _summarize_results(question: str, cypher: str, rows: List[Dict[str, Any]]) -> str:
     """Use the LLM to turn raw Cypher results into a natural-language answer."""
 
@@ -265,8 +316,59 @@ def _summarize_results(question: str, cypher: str, rows: List[Dict[str, Any]]) -
     return chain.invoke({"question": question, "cypher": cypher, "results": rows})
 
 
+def _answer_broken_or_incomplete_flows(graph: Neo4jGraph) -> str:
+    """Domain-specific handler for 'broken or incomplete flows' questions.
+
+    Computes, for each SalesOrder, whether it has delivery and/or billing,
+    and flags those whose lifecycle is incomplete.
+    """
+
+    cypher = """
+    MATCH (o:SalesOrder)
+    OPTIONAL MATCH (o)-[:DELIVERED_IN]->(d:Delivery)
+    OPTIONAL MATCH (o)-[:BILLED]->(b:BillingDocument)
+    WITH o.id AS orderId,
+         (COUNT(DISTINCT d) > 0) AS hasDelivery,
+         (COUNT(DISTINCT b) > 0) AS hasBilling
+    WITH orderId, hasDelivery, hasBilling,
+         CASE
+           WHEN hasDelivery AND NOT hasBilling THEN 'Delivered but not billed'
+           WHEN NOT hasDelivery AND hasBilling THEN 'Billed without delivery'
+           WHEN NOT hasDelivery AND NOT hasBilling THEN 'Neither delivered nor billed'
+           ELSE 'Complete flow'
+         END AS flowStatus
+    RETURN orderId, flowStatus
+    ORDER BY orderId
+    LIMIT 100
+    """
+
+    rows: List[Dict[str, Any]] = graph.query(cypher)
+    broken = [r for r in rows if r.get("flowStatus") != "Complete flow"]
+
+    if not broken:
+        return (
+            "All sampled sales orders (up to 100) have a complete flow "
+            "from delivery to billing, based on the current data."
+        )
+
+    lines = [
+        "Sales orders with broken or incomplete flows (up to 100 orders checked):"
+    ]
+    for r in broken:
+        lines.append(f"- Order {r.get('orderId')}: {r.get('flowStatus')}")
+
+    return "\n".join(lines)
+
+
 def answer_question(question: str) -> str:
     graph = get_neo4j_graph()
+
+    # Special-case certain domain questions where we have a robust
+    # hand-written Cypher query that is less error-prone than the LLM.
+    q_lower = question.lower()
+    if "broken or incomplete flows" in q_lower:
+        return _answer_broken_or_incomplete_flows(graph)
+
     # Step 1: generate Cypher from the question and current schema
     cypher_gen = _build_cypher_generator()
     cypher_raw = cypher_gen.invoke({"question": question})
@@ -275,6 +377,7 @@ def answer_question(question: str) -> str:
     cypher = _fix_payment_path_conflict(cypher)
     cypher = _fix_optional_relationship_markers(cypher)
     cypher = _fix_payment_alias_conflicts(cypher)
+    cypher = _fix_top_level_case_expressions(cypher)
 
     # Step 2: run Cypher against Neo4j via langchain_neo4j.Neo4jGraph
     rows: List[Dict[str, Any]] = graph.query(cypher)
